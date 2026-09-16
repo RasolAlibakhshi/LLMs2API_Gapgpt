@@ -1,0 +1,4 @@
+curl --location 'http://localhost:3003/v1/chat/completions' \
+--header 'Authorization: Bearer sk-chatgpt' \
+--header 'Content-Type: application/json' \
+--data '{"model":"gapgpt","messages":[{"role":"user","content":"چه خبر"}],"stream":false}'

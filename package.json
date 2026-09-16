@@ -1,0 +1,13 @@
+{
+  "name": "chatgpt-api",
+  "version": "1.0.0",
+  "description": "GapGPT web to OpenAI-compatible API server using Playwright",
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file=.env server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "playwright": "^1.40.0"
+  }
+}
