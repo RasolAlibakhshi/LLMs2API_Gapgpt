@@ -4,7 +4,7 @@
 export function createCapture() {
   let armed = false, requestId, messageToken, chatToken;
   let blocks = [], pending = [];
-  const state = { text: '', complete: false, error: null, sent: false };
+  const state = { text: '', complete: false, error: null, sent: false, chatToken: null };
   const render = () => {
     state.text = blocks.filter(b => b.type === 'text').map(b => b.content || '').join('\n\n');
   };
@@ -21,6 +21,7 @@ export function createCapture() {
       }
       messageToken = data.message?.token;
       chatToken = data.message?.chat_token || data.chat?.token;
+      state.chatToken = chatToken || null;
       if (!messageToken) {
         state.error = 'GapGPT acknowledgement has no message token';
         state.complete = true;
@@ -70,7 +71,7 @@ export function createCapture() {
       requestId = messageToken = chatToken = undefined;
       blocks = [];
       pending = [];
-      Object.assign(state, { text: '', complete: false, error: null, sent: false });
+      Object.assign(state, { text: '', complete: false, error: null, sent: false, chatToken: null });
     },
     disarm() { armed = false; pending = []; },
     outgoing(raw) {

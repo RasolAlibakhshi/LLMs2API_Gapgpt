@@ -84,7 +84,7 @@ test('HTTP JSON, streaming, authentication, validation and error responses', asy
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const base = `http://127.0.0.1:${server.address().port}`;
-  const headers = { Authorization: `Bearer ${process.env.AUTH_TOKEN || 'sk-chatgpt'}`, 'Content-Type': 'application/json' };
+  const headers = { Authorization: 'Bearer arbitrary-client-token', 'Content-Type': 'application/json' };
   const post = body => fetch(base + '/v1/chat/completions', { method: 'POST', headers, body: JSON.stringify(body) });
   assert.equal((await fetch(base + '/v1/models')).status, 401);
   assert.equal((await (await fetch(base + '/v1/models', { headers })).json()).data[0].id, 'gapgpt');
@@ -95,8 +95,41 @@ test('HTTP JSON, streaming, authentication, validation and error responses', asy
   assert.equal((await post({ messages, model: 'unknown' })).status, 400);
   assert.equal((await post({ messages: 'wrong' })).status, 400);
   assert.equal((await post({ messages: [{ role: 'user', content: [{ type: 'image_url' }] }] })).status, 400);
-  assert.equal((await post({ messages: [{ role: 'user', content: 'fail' }] })).status, 500);
+  assert.equal((await post({ messages: [{ role: 'user', content: 'fail' }] })).status, 429);
   const failure = await (await post({ stream: true, messages: [{ role: 'user', content: 'fail' }] })).text();
-  assert.match(failure, /message_limit/); assert.doesNotMatch(failure, /"finish_reason":"stop"/);
+  assert.match(failure, /upstream_quota/); assert.doesNotMatch(failure, /"finish_reason":"stop"/);
   assert.equal((await fetch(base + '/v1/chat/completions', { method: 'POST', headers, body: '{' })).status, 400);
+});
+
+test('HTTP accepts different conversation tokens and forwards them for JSON and streaming', async t => {
+  const calls = [];
+  const server = http.createServer((req, res) => handleRequest(req, res, async (prompt, model, chunk, token) => {
+    calls.push({ token, prompt });
+    chunk?.('ok');
+    return 'ok';
+  }));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  for (const [token, stream] of [['alice', false], ['bob', true], ['alice', true]]) {
+    const response = await fetch(base + '/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'hello' }], stream })
+    });
+    assert.equal(response.status, 200);
+    await response.text();
+  }
+  assert.deepEqual(calls.map(c => c.token), ['alice', 'bob', 'alice']);
+  for (const authorization of ['', 'Bearer', 'Bearer    ', 'Basic alice', 'alice', 'Bearer alice bob']) {
+    for (const route of ['/v1/models', '/v1/chat/completions']) {
+      const response = await fetch(base + route, {
+        method: route.endsWith('completions') ? 'POST' : 'GET',
+        headers: { Authorization: authorization }
+      });
+      assert.equal(response.status, 401);
+      await response.text();
+    }
+  }
+  assert.equal(calls.length, 3);
 });

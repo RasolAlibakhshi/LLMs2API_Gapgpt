@@ -1,1 +1,8 @@
-/node_modules
+.env
+node_modules/
+browser-state.json
+browser-state.json.tmp
+conversations.json
+conversations.json.tmp
+.test-state-*/
+.test-browser-*/
