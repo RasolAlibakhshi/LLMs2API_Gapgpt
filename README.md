@@ -1,156 +1,227 @@
-# GapGPT API
+# GapGPT Web API
 
-Run `npm start` from the project directory and sign in to GapGPT using the
-initial browser tab if needed. `.env.example` lists optional settings; existing
-`.env` files do not need new entries because each setting has a default.
+تبدیل رابط وب GapGPT به یک API محلی با قالب Chat Completions، با استفاده از **Node.js** و **Playwright**. پیام‌ها در یک تب مرورگر ارسال می‌شوند و پاسخ به‌صورت JSON یا استریم SSE در اختیار برنامهٔ شما قرار می‌گیرد.
 
-Send `Authorization: Bearer <your-token>` on `/v1/` requests. Any non-empty
-token of up to 512 characters without whitespace is accepted. `AUTH_TOKEN`
-in the server environment is ignored. Tokens identify clients; they are not
-verified credentials. Reusing a token gives access to that token's chats.
-All tabs use the same signed-in GapGPT account and its shared quota.
+## منشأ پروژه و اعتبار نویسندهٔ اصلی
 
-## Conversations
+**من کد پایهٔ این پروژه را از بخش `chatgpt` مخزن [Kirazul/LLMs2API](https://github.com/Kirazul/LLMs2API) کپی کرده‌ام و سپس آن را برای استفاده با GapGPT و نیازهای خودم ویرایش کرده‌ام. این پروژه از صفر توسط من نوشته نشده است.**
 
-The conversation key is the combination of the Bearer token and
-`conversation_id`. IDs are case-sensitive, contain letters, digits, hyphens
-or underscores, and have a maximum length of 128 characters.
+اعتبار کد پایه و ایدهٔ پروژه متعلق به نویسنده و مشارکت‌کنندگان LLMs2API است. تغییرات این نسخه شامل سازگارکردن ارسال و دریافت پیام با GapGPT، ادامهٔ یک گفت‌وگوی ثابت بدون رفرش صفحه، صف‌بندی درخواست‌ها، تنظیمات `.env` و تست‌های محلی است.
 
-- Omit `conversation_id` to continue the token's `default` conversation.
-- Supply a different ID to start or continue another chat for the same token.
-- Each conversation has its own FIFO queue. Different conversations can run
-  concurrently within the configured limits.
-- Only the last user message in `messages` is sent. History is held by the
-  remote chat; resubmitting previous messages does not rebuild it.
-- IDs are returned in `conversation_id` and the `X-Conversation-Id` header,
-  including in streaming responses.
+این مخزن یک نسخهٔ ویرایش‌شده از کد پایه است و API رسمی GapGPT یا OpenAI محسوب نمی‌شود.
 
-Example request to `POST /v1/chat/completions`:
+## قابلیت‌ها
 
-```json
-{
-  "model": "gapgpt",
-  "conversation_id": "work",
-  "messages": [{ "role": "user", "content": "Hello" }],
-  "stream": false
-}
+- ارسال پیام به رابط وب `https://gapgpt.app/chat/` از طریق Playwright.
+- ادامهٔ پیام‌ها در همان گفت‌وگو، بدون رفرش یا رفتن به `about:blank` بین درخواست‌ها.
+- پردازش درخواست‌های هم‌زمان به‌ترتیب در یک صف.
+- پاسخ معمولی JSON و پاسخ تدریجی SSE با `stream: true`.
+- دریافت رویدادهای پاسخ از WebSocket و مسیر جایگزین EventSource/HTTP سایت.
+- ذخیره و بازیابی نشست ورود مرورگر.
+- احراز هویت API با Bearer token و تنظیمات قابل تغییر در `.env`.
+
+## نحوهٔ کار
+
+```text
+Client / cURL
+     |
+     v
+POST /v1/chat/completions
+     |
+     v
+Request queue -> Playwright -> GapGPT web chat
+                                  |
+                                  v
+Client <- JSON / SSE <- Response events
 ```
 
-Send the next message with the same token and `conversation_id` to continue.
-Use a different ID for a new chat, or call `POST /v1/conversations` with `{}`
-to allocate a random ID. Its response is `{ "id": "...", "created_at": "..." }`.
-An optional `conversation_id` in that endpoint reserves your own ID;
-repeating it returns the existing conversation and does not reset history.
-Creating metadata does not open a browser tab until the first message.
+سرور هنگام شروع، یک تب GapGPT باز می‌کند. هر درخواست فقط آخرین پیام `user` را در همان صفحه می‌فرستد و منتظر تکمیل پاسخ می‌ماند. درخواست بعدی پس از پایان پردازش درخواست قبلی اجرا می‌شود.
 
-`GET /v1/conversations` lists only the calling token's conversations, including
-whether each has a saved URL (`resumable`). `GET /v1/models` lists models.
-`GET /health` needs no token and reports browser connectivity, open chat tabs,
-active/queued requests, tab/concurrency limits and stored conversation count.
-The initial login tab is excluded from chat tab counts and limits.
+**همهٔ کلاینت‌های متصل به این سرور یک گفت‌وگوی مشترک دارند.** نشست مستقل برای هر کاربر یا هر درخواست پیاده‌سازی نشده است. سابقهٔ پیام‌ها در چت سایت باقی می‌ماند؛ لازم نیست تاریخچه را در هر درخواست دوباره ارسال کنید.
 
-## Persistence and recovery
+## پیش‌نیازها
 
-`conversations.json` stores the hash of each token, conversation IDs and
-observed remote chat URLs. Writes replace the file atomically. Tokens are not
-stored in plaintext. Browser login state is saved separately in
-`browser-state.json` every 30 seconds and on graceful shutdown. Both files
-are excluded from Git. Run a single server process per project/state file.
+- Node.js نسخهٔ 22 یا بالاتر و npm برای راه‌اندازی مطابق این راهنما.
+- Chromium نصب‌شده توسط Playwright.
+- دسترسی به GapGPT و یک حساب با دسترسی به مدل موردنظر.
+- محیط گرافیکی برای ورود اولیه در مرورگر.
 
-After a restart, a manually closed tab, or browser disconnection, the next
-request reopens the saved chat URL. Browser launches are shared by concurrent
-requests. Failed setup may retry once **before sending**; sent messages are
-never automatically repeated. If login expires, sign in using the initial
-tab and retry only requests known not to have been sent.
+## نصب و اجرا
 
-Idle tabs close after 10 minutes by default. At the tab limit, the oldest
-available idle tab is closed to make room. Active tabs are preserved. Closing
-a tab does not delete its remote chat or local mapping.
+دستورها را در پوشه‌ای اجرا کنید که `package.json` و `server.js` قرار دارند. اگر ساختار مخزن اصلی را نگه داشته‌اید، ابتدا وارد پوشهٔ `chatgpt` شوید.
 
-Recovery depends on the remote chat still existing and its URL having been
-observed and saved. If a first send is interrupted before that happens, the
-server reports `history_unavailable` instead of silently creating a different
-chat. Keep an unsaved live tab open, inspect the remote chat, or explicitly
-create a new conversation. Conversations from the previous in-memory-only
-version cannot be automatically mapped back to their original tokens.
+### ۱. نصب وابستگی‌ها
 
-## Safe retries
-
-Add a unique `Idempotency-Key` header to each logical message, and reuse that
-key with the same content, model, token and conversation when retrying.
-Keys accept 1–128 printable ASCII characters without spaces.
-
-- Simultaneous identical requests share one send.
-- Completed requests replay their saved answer, including after a restart.
-  A streaming replay emits the saved answer as one content chunk.
-- A reused key with different content/model returns `idempotency_conflict`.
-- If delivery was interrupted after clicking Send, repeating the key returns
-  `request_outcome_unknown`; inspect the chat before choosing a new key.
-- Without a key, separate requests are separate messages even if text matches.
-
-The last 100 keys per conversation are retained by default. The oldest
-completed keys are evicted when needed; pending/uncertain keys are not evicted.
-Do not reuse keys after they leave this retention window. Answer text for
-retained successful keys is stored locally; message text is fingerprinted.
-
-## Limits
-
-All settings below are positive integers in `.env`.
-
-| Setting | Default | Meaning |
-| --- | ---: | --- |
-| `MAX_CHAT_TABS` | 6 | Open chat tabs, plus the separate login tab |
-| `MAX_CONCURRENT_REQUESTS` | 3 | Active sends; capped by the chat tab limit |
-| `MAX_PENDING_REQUESTS` | 100 | Total accepted active and queued requests |
-| `MAX_PENDING_PER_TOKEN` | 20 | Active and queued requests per token |
-| `MAX_PENDING_PER_CONVERSATION` | 10 | Active and queued requests per conversation |
-| `MAX_STORED_CONVERSATIONS` | 1000 | Total stored mappings |
-| `MAX_CONVERSATIONS_PER_TOKEN` | 100 | Stored mappings per token |
-| `TAB_IDLE_TIMEOUT_MS` | 600000 | Idle lifetime; cleanup checks at most every 30 seconds |
-| `MAX_BODY_BYTES` | 1048576 | Maximum JSON request body size |
-| `MAX_MESSAGE_CHARS` | 64000 | Maximum last-user-message length (JavaScript UTF-16 units) |
-| `REQUESTS_PER_MINUTE_PER_TOKEN` | 60 | `/v1/` requests per token per fixed minute window |
-| `REQUESTS_PER_MINUTE_GLOBAL` | 300 | Total `/v1/` requests per fixed minute window |
-| `GENERATION_TIMEOUT` | 300000 | Generation timeout in milliseconds |
-| `IDEMPOTENCY_HISTORY_SIZE` | 100 | Retained request keys per conversation |
-
-Queue/rate/capacity limits return HTTP 429; size limits return 413.
-Rate limiting also covers metadata calls and replay requests. Changing tokens
-does not bypass the global rate, queue, concurrency or tab limits.
-
-## Errors
-
-Errors use this shape:
-
-```json
-{
-  "error": {
-    "code": "browser_unavailable",
-    "message": "Browser connection or conversation tab was closed.",
-    "retryable": false,
-    "delivery": "unknown"
-  }
-}
+```bash
+npm install
+npx playwright install chromium
 ```
 
-`delivery` is `not_sent`, `rejected` or `unknown`. An unknown outcome must not
-be blindly resubmitted. Typical codes are `login_required`,
-`composer_unavailable`, `upstream_quota`, `upstream_timeout`,
-`browser_unavailable`, `history_unavailable`, `storage_unavailable`,
-`capacity_exceeded`, `rate_limit_exceeded` and `request_outcome_unknown`.
-HTTP 429 includes `Retry-After`; account quota errors additionally require
-the shared account's limit to be resolved.
+### ۲. ایجاد فایل تنظیمات
 
-For streaming, failures before the first content chunk use normal HTTP errors.
-Once streaming has started, an error is emitted as an SSE `data:` event and
-the stream ends without `[DONE]` or a successful finish marker. A client
-disconnect does not cancel an already accepted message; reuse its request key
-to retrieve a retained completed result.
+در کنار `package.json` یک فایل به نام `.env` بسازید:
 
-## Validation
+```dotenv
+PORT=3003
+AUTH_TOKEN=your-local-api-key
+HEADLESS=false
+GENERATION_TIMEOUT=300000
+```
 
-Run `npm test`. Tests cover HTTP and SSE behavior, persistence across manager
-restarts, token/chat isolation, idle eviction, queue/rate/body limits, browser
-recovery, uncertain delivery, idempotency and split UTF-8 request bodies.
-Browser tests use local doubles and the real capture reducer; they do not send
-messages to the live GapGPT site or verify its current UI/URL conventions.
+مقدار `your-local-api-key` را با کلید دلخواه خود جایگزین کنید. این کلید برای دسترسی به همین سرور است و ارتباطی با کلید حساب GapGPT یا OpenAI ندارد.
+
+| متغیر | پیش‌فرض کد | توضیح |
+| --- | --- | --- |
+| `PORT` | `3003` | پورت سرور HTTP |
+| `AUTH_TOKEN` | `sk-chatgpt` | کلید موردنیاز برای مسیرهای مدل‌ها و چت |
+| `HEADLESS` | `false` | با مقدار دقیق `true` مرورگر بدون پنجره اجرا می‌شود |
+| `GENERATION_TIMEOUT` | `300000` | مهلت انتظار دریافت پاسخ، بر حسب میلی‌ثانیه |
+
+`npm start` فایل `.env` را خودکار بارگذاری می‌کند؛ فایل باید وجود داشته باشد. متغیرهای از قبل تنظیم‌شده در محیط بر مقادیر این فایل اولویت دارند. زمان انتظار در صف و آماده‌شدن صفحه می‌تواند به زمان کل درخواست اضافه شود.
+
+### ۳. اجرای سرور و ورود
+
+```bash
+npm start
+```
+
+در پنجرهٔ مرورگری که سرور باز می‌کند وارد حساب **GapGPT** شوید. پس از آماده‌شدن کادر چت، درخواست API را ارسال کنید. ورود در مرورگر شخصی دیگر، جای ورود در مرورگر این سرور را نمی‌گیرد.
+
+نشست در فایل `browser-state.json` هر ۳۰ ثانیه و هنگام توقف با `Ctrl+C` ذخیره می‌شود. بعد از ذخیرهٔ یک نشست معتبر می‌توانید `HEADLESS=true` بگذارید و سرور را دوباره اجرا کنید.
+
+نشانی پایه برای کلاینت‌ها:
+
+```text
+http://localhost:3003/v1
+```
+
+برای اعمال تغییرات `.env`، سرور را متوقف و دوباره اجرا کنید. اجرای مجدد سرور صفحهٔ شروع چت را باز می‌کند؛ ذخیرهٔ نشست ورود به معنی بازیابی خودکار گفت‌وگوی قبلی نیست.
+
+## استفاده با cURL
+
+در مثال‌ها کلید را مطابق `AUTH_TOKEN` تنظیم کنید. سرور باید در حال اجرا و حساب GapGPT در مرورگر آن وارد شده باشد.
+
+### پاسخ معمولی — Bash، Linux، macOS یا Git Bash
+
+```bash
+curl http://localhost:3003/v1/chat/completions \
+  -H 'Authorization: Bearer your-local-api-key' \
+  -H 'Content-Type: application/json' \
+  --data-raw '{"model":"gapgpt","messages":[{"role":"user","content":"سلام، خودت را معرفی کن."}],"stream":false}'
+```
+
+### پاسخ استریم
+
+```bash
+curl -N http://localhost:3003/v1/chat/completions \
+  -H 'Authorization: Bearer your-local-api-key' \
+  -H 'Content-Type: application/json' \
+  --data-raw '{"model":"gapgpt","messages":[{"role":"user","content":"یک مثال کوتاه بزن."}],"stream":true}'
+```
+
+گزینهٔ `-N` بافر خروجی cURL را غیرفعال می‌کند تا بخش‌های پاسخ هنگام دریافت نمایش داده شوند. پایان موفق استریم با `data: [DONE]` مشخص می‌شود.
+
+### Windows PowerShell
+
+برای جلوگیری از تفاوت نحوهٔ ارسال کوتیشن‌ها در نسخه‌های PowerShell، بدنه را در فایل UTF-8 ذخیره کنید و به `curl.exe` بدهید:
+
+```powershell
+$body = @{
+    model = 'gapgpt'
+    messages = @(@{ role = 'user'; content = 'سلام، خودت را معرفی کن.' })
+    stream = $false
+} | ConvertTo-Json -Depth 5
+
+$requestFile = Join-Path (Get-Location) 'request.json'
+[System.IO.File]::WriteAllText($requestFile, $body, [System.Text.UTF8Encoding]::new($false))
+
+curl.exe http://localhost:3003/v1/chat/completions `
+  -H 'Authorization: Bearer your-local-api-key' `
+  -H 'Content-Type: application/json' `
+  --data-binary '@request.json'
+```
+
+برای استریم در همین مثال، `stream = $true` قرار دهید و گزینهٔ `-N` را به `curl.exe` اضافه کنید. برای ادامهٔ گفت‌وگو، درخواست دیگری با متن پیام بعدی بفرستید؛ پیام در همان چت قبلی اضافه می‌شود.
+
+## مسیرهای API
+
+| متد | مسیر | احراز هویت | کاربرد |
+| --- | --- | --- | --- |
+| `GET` | `/health` | ندارد | وضعیت سرور، تب، مشغول‌بودن و تعداد درخواست‌های صف |
+| `GET` | `/v1/models` | Bearer token | شناسه‌های مدل تعریف‌شده در این واسط |
+| `POST` | `/v1/chat/completions` | Bearer token | ارسال پیام و دریافت پاسخ |
+
+```bash
+curl http://localhost:3003/health
+curl http://localhost:3003/v1/models -H 'Authorization: Bearer your-local-api-key'
+```
+
+پاسخ `/health` بررسی اعتبار نشست ورود یا دسترسی حساب به مدل‌ها نیست. خروجی `/v1/models` نیز از تنظیمات همین کد ساخته می‌شود و سهمیه یا مدل‌های فعال حساب را از سایت دریافت نمی‌کند.
+
+### مدل‌های تعریف‌شده
+
+| مقدار `model` | شناسهٔ مقصد در کد | رفتار |
+| --- | --- | --- |
+| `gapgpt` | بدون جایگزینی شناسه | استفاده از انتخاب فعلی سایت/گفت‌وگو؛ پیش‌فرض API |
+| `gpt-5.1` | `A-GPT-5` | درخواست مدل با این شناسهٔ GapGPT |
+| `gpt-4.1` | `A-GPT-4.1` | درخواست مدل با این شناسهٔ GapGPT |
+| `gpt-4o-mini` | `A-GPT4O-MINI` | درخواست مدل با این شناسهٔ GapGPT |
+
+این نگاشت‌ها در `gapgpt-transport.js` قرار دارند. دسترسی و اجرای مدل به حساب و رفتار سایت وابسته است. مقدار `model` در پاسخ API همان مقدار درخواست است؛ تأیید مستقل مدل اجراشده نیست. تغییر مدل، چت تازه‌ای ایجاد نمی‌کند.
+
+## محدودهٔ پشتیبانی
+
+- فقط متن پشتیبانی می‌شود؛ ورودی تصویر، فایل، تولید تصویر و tool calling پیاده‌سازی نشده‌اند.
+- از آرایهٔ `messages` فقط آخرین پیام با نقش `user` ارسال می‌شود. پیام‌های `system`، `developer` و تاریخچهٔ ارسالی کلاینت منتقل نمی‌شوند.
+- این نسخه بخشی از قالب Chat Completions را پیاده‌سازی می‌کند؛ جایگزین کامل همهٔ قابلیت‌های API نیست. پارامترهایی مانند `temperature` و `max_tokens` اعمال نمی‌شوند.
+- شمارش مصرف توکن انجام نمی‌شود و فیلدهای `usage` در پاسخ معمولی صفر هستند.
+- بلوک‌های reasoning در متن پاسخ API قرار نمی‌گیرند.
+- درخواست‌های هم‌زمان در یک صف پردازش می‌شوند؛ `MAX_PAGES` در این نسخه کاربرد ندارد.
+- قطع اتصال کلاینت، لغو خودکار تولید پاسخ در سایت را پیاده‌سازی نمی‌کند.
+- تغییر رابط وب یا پروتکل داخلی GapGPT ممکن است نیازمند به‌روزرسانی کد باشد.
+
+## خطاها و رفع مشکل
+
+| وضعیت | توضیح یا اقدام |
+| --- | --- |
+| `401 Unauthorized` | کلید هدر `Authorization` را با `AUTH_TOKEN` تطبیق دهید. |
+| `400` | JSON نامعتبر، مدل ناشناخته، نبود پیام کاربر یا ورودی غیرمتنی را بررسی کنید. |
+| `GapGPT composer unavailable` | با `HEADLESS=false` اجرا کنید و ورود و آماده‌بودن صفحهٔ چت را بررسی کنید. |
+| `GapGPT did not send the message` | پنجرهٔ ورود، پیام اشتراک یا سایر دیالوگ‌های مرورگر را بررسی کنید. |
+| `message_limit` یا `sub_upgrade` | پاسخ محدودیت دسترسی از سایت دریافت شده است؛ وضعیت حساب را بررسی کنید. |
+| `generation timed out` | پاسخ در مهلت مشخص تکمیل نشده؛ وضعیت مرورگر و مقدار `GENERATION_TIMEOUT` را بررسی کنید. |
+| `conversation tab was closed` | سرور را دوباره اجرا کنید تا صفحهٔ چت باز شود. |
+| `revised already streamed text` | سایت متن قبلاً ارسال‌شده را بازنویسی کرده؛ درخواست را با `stream: false` امتحان کنید. |
+
+در حالت معمولی، خطاهای تولید پاسخ با وضعیت HTTP `500` برمی‌گردند. در حالت استریم، چون هدر `200` از قبل ارسال شده، خطا داخل یک رویداد `data` با فیلد `error` می‌آید و پایان موفق `[DONE]` ارسال نمی‌شود. تکرار درخواست یک پیام جدید به گفت‌وگو اضافه می‌کند.
+
+## ساختار فایل‌ها
+
+```text
+.
+├── server.js                  # HTTP API، راه‌اندازی مرورگر و ذخیرهٔ نشست
+├── conversation.js            # گفت‌وگوی ثابت و صف درخواست‌ها
+├── gapgpt-transport.js         # رهگیری رویدادهای سایت و نگاشت مدل‌ها
+├── test/
+│   ├── conversation.test.js    # ترتیب پیام‌ها و ادامهٔ چت
+│   └── gapgpt.test.js          # پردازش رویدادها و پاسخ‌های HTTP/SSE
+├── package.json
+├── package-lock.json
+├── .env                       # تنظیمات محلی؛ برای انتشار نیست
+├── browser-state.json         # نشست ورود؛ هنگام اجرا ذخیره می‌شود
+└── README.md
+```
+
+## تست‌ها
+
+```bash
+npm test
+```
+
+تست‌ها صف‌بندی پیام‌ها، ادامهٔ چند درخواست بدون رفرش، بازیابی پس از خطای یک درخواست، جداسازی رویدادها، متن فارسی و Unicode، خطای سهمیه، مسیرهای WebSocket/SSE و خروجی HTTP را با داده‌ها و صفحهٔ شبیه‌سازی‌شده بررسی می‌کنند. این تست‌ها پیام واقعی به حساب ارسال نمی‌کنند و جای بررسی عملی با حساب واردشده را نمی‌گیرند.
+
+
+
+سرور فعلی روی میزبان مشخصی محدود نشده و CORS آن باز است. برای اجرای خارج از سیستم شخصی، کنترل دسترسی شبکه و کلید احراز هویت را متناسب با محیط تنظیم کنید.
+
+از نویسنده و مشارکت‌کنندگان **LLMs2API** برای کد پایهٔ این نسخه سپاسگزارم.
